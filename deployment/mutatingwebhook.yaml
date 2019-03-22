@@ -17,11 +17,11 @@ webhooks:
           - "CREATE"
           - "UPDATE"
         apiGroups:
-          - "*"
+          - "extensions"
         apiVersions:
-          - "*"
+          - "v1beta1"
         resources:
-          - "*"
+          - "ingresses"
     namespaceSelector:
       matchLabels:
         sidecar-injector: enabled
