@@ -13,10 +13,15 @@ webhooks:
         path: "/mutate"
       caBundle: ${CA_BUNDLE}
     rules:
-      - operations: [ "CREATE" ]
-        apiGroups: [""]
-        apiVersions: ["v1"]
-        resources: ["pods"]
+      - operations:
+          - "CREATE"
+          - "UPDATE"
+        apiGroups:
+          - "*"
+        apiVersions:
+          - "*"
+        resources:
+          - "*"
     namespaceSelector:
       matchLabels:
         sidecar-injector: enabled

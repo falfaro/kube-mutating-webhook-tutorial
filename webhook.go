@@ -10,13 +10,15 @@ import (
 
 	"github.com/ghodss/yaml"
 	"github.com/golang/glog"
+	govalidator "gopkg.in/go-playground/validator.v9"
 	"k8s.io/api/admission/v1beta1"
 	admissionregistrationv1beta1 "k8s.io/api/admissionregistration/v1beta1"
 	corev1 "k8s.io/api/core/v1"
+	extensionsv1beta1 "k8s.io/api/extensions/v1beta1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/serializer"
-	"k8s.io/kubernetes/pkg/apis/core/v1"
+	v1 "k8s.io/kubernetes/pkg/apis/core/v1"
 )
 
 var (
@@ -28,32 +30,22 @@ var (
 	defaulter = runtime.ObjectDefaulter(runtimeScheme)
 )
 
-var ignoredNamespaces = []string {
-	metav1.NamespaceSystem,
-	metav1.NamespacePublic,
-}
-
-const (
-	admissionWebhookAnnotationInjectKey = "sidecar-injector-webhook.morven.me/inject"
-	admissionWebhookAnnotationStatusKey = "sidecar-injector-webhook.morven.me/status"
-)
-
 type WebhookServer struct {
-	sidecarConfig    *Config
-	server           *http.Server
+	sidecarConfig *Config
+	server        *http.Server
 }
 
 // Webhook Server parameters
 type WhSvrParameters struct {
-	port int                 // webhook server port
-	certFile string          // path to the x509 certificate for https
-	keyFile string           // path to the x509 private key matching `CertFile`
-	sidecarCfgFile string    // path to sidecar injector configuration file
+	port           int    // webhook server port
+	certFile       string // path to the x509 certificate for https
+	keyFile        string // path to the x509 private key matching `CertFile`
+	sidecarCfgFile string // path to sidecar injector configuration file
 }
 
 type Config struct {
-	Containers  []corev1.Container  `yaml:"containers"`
-	Volumes     []corev1.Volume     `yaml:"volumes"`
+	Containers []corev1.Container `yaml:"containers"`
+	Volumes    []corev1.Volume    `yaml:"volumes"`
 }
 
 type patchOperation struct {
@@ -72,10 +64,10 @@ func init() {
 
 // (https://github.com/kubernetes/kubernetes/issues/57982)
 func applyDefaultsWorkaround(containers []corev1.Container, volumes []corev1.Volume) {
-	defaulter.Default(&corev1.Pod {
-		Spec: corev1.PodSpec {
-			Containers:     containers,
-			Volumes:        volumes,
+	defaulter.Default(&corev1.Pod{
+		Spec: corev1.PodSpec{
+			Containers: containers,
+			Volumes:    volumes,
 		},
 	})
 }
@@ -86,47 +78,13 @@ func loadConfig(configFile string) (*Config, error) {
 		return nil, err
 	}
 	glog.Infof("New configuration: sha256sum %x", sha256.Sum256(data))
-	
+
 	var cfg Config
 	if err := yaml.Unmarshal(data, &cfg); err != nil {
 		return nil, err
 	}
-	
+
 	return &cfg, nil
-}
-
-// Check whether the target resoured need to be mutated
-func mutationRequired(ignoredList []string, metadata *metav1.ObjectMeta) bool {
-	// skip special kubernete system namespaces
-	for _, namespace := range ignoredList {
-		if metadata.Namespace == namespace {
-			glog.Infof("Skip mutation for %v for it' in special namespace:%v", metadata.Name, metadata.Namespace)
-			return false
-		}
-	}
-
-	annotations := metadata.GetAnnotations()
-	if annotations == nil {
-		annotations = map[string]string{}
-	}
-
-	status := annotations[admissionWebhookAnnotationStatusKey]
-	
-	// determine whether to perform mutation based on annotation for the target resource
-	var required bool
-	if strings.ToLower(status) == "injected" {
-		required = false;
-	} else {
-		switch strings.ToLower(annotations[admissionWebhookAnnotationInjectKey]) {
-		default:
-			required = false
-		case "y", "yes", "true", "on":
-			required = true
-		}
-	}
-	
-	glog.Infof("Mutation policy for %v/%v: status: %q required:%v", metadata.Namespace, metadata.Name, status, required)
-	return required
 }
 
 func addContainer(target, added []corev1.Container, basePath string) (patch []patchOperation) {
@@ -141,7 +99,7 @@ func addContainer(target, added []corev1.Container, basePath string) (patch []pa
 		} else {
 			path = path + "/-"
 		}
-		patch = append(patch, patchOperation {
+		patch = append(patch, patchOperation{
 			Op:    "add",
 			Path:  path,
 			Value: value,
@@ -162,7 +120,7 @@ func addVolume(target, added []corev1.Volume, basePath string) (patch []patchOpe
 		} else {
 			path = path + "/-"
 		}
-		patch = append(patch, patchOperation {
+		patch = append(patch, patchOperation{
 			Op:    "add",
 			Path:  path,
 			Value: value,
@@ -175,7 +133,7 @@ func updateAnnotation(target map[string]string, added map[string]string) (patch 
 	for key, value := range added {
 		if target == nil || target[key] == "" {
 			target = map[string]string{}
-			patch = append(patch, patchOperation {
+			patch = append(patch, patchOperation{
 				Op:   "add",
 				Path: "/metadata/annotations",
 				Value: map[string]string{
@@ -183,7 +141,7 @@ func updateAnnotation(target map[string]string, added map[string]string) (patch 
 				},
 			})
 		} else {
-			patch = append(patch, patchOperation {
+			patch = append(patch, patchOperation{
 				Op:    "replace",
 				Path:  "/metadata/annotations/" + key,
 				Value: value,
@@ -196,7 +154,7 @@ func updateAnnotation(target map[string]string, added map[string]string) (patch 
 // create mutation patch for resoures
 func createPatch(pod *corev1.Pod, sidecarConfig *Config, annotations map[string]string) ([]byte, error) {
 	var patch []patchOperation
-	
+
 	patch = append(patch, addContainer(pod.Spec.Containers, sidecarConfig.Containers, "/spec/containers")...)
 	patch = append(patch, addVolume(pod.Spec.Volumes, sidecarConfig.Volumes, "/spec/volumes")...)
 	patch = append(patch, updateAnnotation(pod.Annotations, annotations)...)
@@ -207,47 +165,88 @@ func createPatch(pod *corev1.Pod, sidecarConfig *Config, annotations map[string]
 // main mutation process
 func (whsvr *WebhookServer) mutate(ar *v1beta1.AdmissionReview) *v1beta1.AdmissionResponse {
 	req := ar.Request
-	var pod corev1.Pod
-	if err := json.Unmarshal(req.Object.Raw, &pod); err != nil {
-		glog.Errorf("Could not unmarshal raw object: %v", err)
-		return &v1beta1.AdmissionResponse {
-			Result: &metav1.Status {
-				Message: err.Error(),
-			},
+	if req.Kind.Version == "v1beta1" && req.Kind.Kind == "Ingress" {
+		var ingress extensionsv1beta1.Ingress
+		if err := json.Unmarshal(req.Object.Raw, &ingress); err != nil {
+			// Error unmarshalling Ingress
+			return &v1beta1.AdmissionResponse{
+				Result: &metav1.Status{
+					Message: err.Error(),
+				},
+			}
+		}
+
+		glog.Infof("Parsed Ingress: %s", ingress.String())
+		glog.Infof("Length of TLS: %v", len(ingress.Spec.TLS))
+
+		var patch []patchOperation
+
+		for tlsIndex, tls := range ingress.Spec.TLS {
+			glog.Infof("Length of %s: %v", tls.SecretName, len(tls.Hosts))
+			if len(tls.Hosts) == 0 {
+				// Need to generate a patch to add a single FQDN Host
+				// derived from the Ingress name and BKPR's DNS domain
+				glog.Infof("No Hosts for %s", tls.SecretName)
+				patch = append(patch, patchOperation{
+					Op:    "replace",
+					Path:  fmt.Sprintf("/spec/tls/%d/hosts", tlsIndex),
+					Value: []string{"cafe.eks.felipe-alfaro.com"},
+				})
+			} else {
+				for hostIndex, host := range tls.Hosts {
+					if len(host) == 0 {
+						// Empty Host: need to generate to replace its value with
+						// one derived from the Ingress name and BKPR's domain
+						glog.Info("Parsed No Host")
+						patch = append(patch, patchOperation{
+							Op:    "replace",
+							Path:  fmt.Sprintf("/spec/tls/%d/hosts/%d", tlsIndex, hostIndex),
+							Value: "cafe.eks.felipe-alfaro.com",
+						})
+					} else {
+						// Check whether Host is a FQDN
+						v := govalidator.New()
+						if err := v.Var(host, "fqdn"); err == nil {
+							glog.Infof("Parsed FQDN Host: %s", host)
+						} else {
+							// Non-FQDN: need to qualify the Host with BKPR's
+							// domain
+							newHost := host
+							if !strings.HasSuffix(host, ".") {
+								newHost += "."
+							}
+							newHost += "eks.felipe-alfaro.com"
+							patch = append(patch, patchOperation{
+								Op:    "replace",
+								Path:  fmt.Sprintf("/spec/tls/%d/hosts/%d", tlsIndex, hostIndex),
+								Value: newHost,
+							})
+							glog.Infof("Parsed non-FQDN: %s into: %s", host, newHost)
+						}
+					}
+				}
+			}
+		}
+
+		patchBytes, err := json.Marshal(patch)
+		if err != nil {
+			glog.Error("Error marshalling patch!")
+			return &v1beta1.AdmissionResponse{
+				Result: &metav1.Status{
+					Message: err.Error(),
+				},
+			}
+		}
+
+		glog.Infof("Patch: %v", string(patchBytes))
+		return &v1beta1.AdmissionResponse{
+			Allowed: true,
+			Patch:   patchBytes,
 		}
 	}
 
-	glog.Infof("AdmissionReview for Kind=%v, Namespace=%v Name=%v (%v) UID=%v patchOperation=%v UserInfo=%v",
-		req.Kind, req.Namespace, req.Name, pod.Name, req.UID, req.Operation, req.UserInfo)
-	
-	// determine whether to perform mutation
-	if !mutationRequired(ignoredNamespaces, &pod.ObjectMeta) {
-		glog.Infof("Skipping mutation for %s/%s due to policy check", pod.Namespace, pod.Name)
-		return &v1beta1.AdmissionResponse {
-			Allowed: true, 
-		}
-	}
-	
-	// Workaround: https://github.com/kubernetes/kubernetes/issues/57982
-	applyDefaultsWorkaround(whsvr.sidecarConfig.Containers, whsvr.sidecarConfig.Volumes)
-	annotations := map[string]string{admissionWebhookAnnotationStatusKey: "injected"}
-	patchBytes, err := createPatch(&pod, whsvr.sidecarConfig, annotations)
-	if err != nil {
-		return &v1beta1.AdmissionResponse {
-			Result: &metav1.Status {
-				Message: err.Error(),
-			},
-		}
-	}
-	
-	glog.Infof("AdmissionResponse: patch=%v\n", string(patchBytes))
-	return &v1beta1.AdmissionResponse {
+	return &v1beta1.AdmissionResponse{
 		Allowed: true,
-		Patch:   patchBytes,
-		PatchType: func() *v1beta1.PatchType {
-			pt := v1beta1.PatchTypeJSONPatch
-			return &pt
-		}(),
 	}
 }
 
@@ -265,6 +264,11 @@ func (whsvr *WebhookServer) serve(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if glog.V(1) {
+		// Dump body
+		glog.Infof("Body: %s", body)
+	}
+
 	// verify the content type is accurate
 	contentType := r.Header.Get("Content-Type")
 	if contentType != "application/json" {
@@ -277,8 +281,8 @@ func (whsvr *WebhookServer) serve(w http.ResponseWriter, r *http.Request) {
 	ar := v1beta1.AdmissionReview{}
 	if _, _, err := deserializer.Decode(body, nil, &ar); err != nil {
 		glog.Errorf("Can't decode body: %v", err)
-		admissionResponse = &v1beta1.AdmissionResponse {
-			Result: &metav1.Status {
+		admissionResponse = &v1beta1.AdmissionResponse{
+			Result: &metav1.Status{
 				Message: err.Error(),
 			},
 		}
@@ -299,7 +303,7 @@ func (whsvr *WebhookServer) serve(w http.ResponseWriter, r *http.Request) {
 		glog.Errorf("Can't encode response: %v", err)
 		http.Error(w, fmt.Sprintf("could not encode response: %v", err), http.StatusInternalServerError)
 	}
-	glog.Infof("Ready to write reponse ...")
+
 	if _, err := w.Write(resp); err != nil {
 		glog.Errorf("Can't write response: %v", err)
 		http.Error(w, fmt.Sprintf("could not write response: %v", err), http.StatusInternalServerError)

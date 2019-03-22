@@ -13,8 +13,8 @@ spec:
     spec:
       containers:
         - name: sidecar-injector
-          image: morvencao/sidecar-injector:v1
-          imagePullPolicy: IfNotPresent
+          image: falfaro/sidecar-injector:latest
+          imagePullPolicy: Always
           args:
             - -sidecarCfgFile=/etc/webhook/config/sidecarconfig.yaml
             - -tlsCertFile=/etc/webhook/certs/cert.pem
