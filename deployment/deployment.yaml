@@ -16,7 +16,7 @@ spec:
           image: falfaro/sidecar-injector:latest
           imagePullPolicy: Always
           args:
-            - -sidecarCfgFile=/etc/webhook/config/sidecarconfig.yaml
+            - -dnsSuffix=eks.felipe-alfaro.com
             - -tlsCertFile=/etc/webhook/certs/cert.pem
             - -tlsKeyFile=/etc/webhook/certs/key.pem
             - -alsologtostderr

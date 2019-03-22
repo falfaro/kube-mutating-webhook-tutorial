@@ -1,14 +1,12 @@
 package main
 
 import (
-	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"io/ioutil"
 	"net/http"
 	"strings"
 
-	"github.com/ghodss/yaml"
 	"github.com/golang/glog"
 	govalidator "gopkg.in/go-playground/validator.v9"
 	"k8s.io/api/admission/v1beta1"
@@ -31,21 +29,8 @@ var (
 )
 
 type webhookServer struct {
-	sidecarConfig *config
-	server        *http.Server
-}
-
-// Webhook Server parameters
-type whSvrParameters struct {
-	port           int    // webhook server port
-	certFile       string // path to the x509 certificate for https
-	keyFile        string // path to the x509 private key matching `CertFile`
-	sidecarCfgFile string // path to sidecar injector configuration file
-}
-
-type config struct {
-	Containers []corev1.Container `yaml:"containers"`
-	Volumes    []corev1.Volume    `yaml:"volumes"`
+	server    *http.Server
+	dnsSuffix string
 }
 
 type patchOperation struct {
@@ -60,21 +45,6 @@ func init() {
 	// defaulting with webhooks:
 	// https://github.com/kubernetes/kubernetes/issues/57982
 	_ = v1.AddToScheme(runtimeScheme)
-}
-
-func loadConfig(configFile string) (*config, error) {
-	data, err := ioutil.ReadFile(configFile)
-	if err != nil {
-		return nil, err
-	}
-	glog.Infof("New configuration: sha256sum %x", sha256.Sum256(data))
-
-	var cfg config
-	if err := yaml.Unmarshal(data, &cfg); err != nil {
-		return nil, err
-	}
-
-	return &cfg, nil
 }
 
 // main mutation process
@@ -92,48 +62,46 @@ func (whsvr *webhookServer) mutate(ar *v1beta1.AdmissionReview) *v1beta1.Admissi
 	}
 
 	var patch []patchOperation
-
 	for tlsIndex, tls := range ingress.Spec.TLS {
 		glog.Infof("Length of %s: %v", tls.SecretName, len(tls.Hosts))
 		if len(tls.Hosts) == 0 {
 			// Need to generate a patch to add a single FQDN Host
 			// derived from the Ingress name and BKPR's DNS domain
-			glog.Infof("No Hosts for %s", tls.SecretName)
+			newHosts := []string{ingress.Name + "." + whsvr.dnsSuffix}
 			patch = append(patch, patchOperation{
 				Op:    "replace",
 				Path:  fmt.Sprintf("/spec/tls/%d/hosts", tlsIndex),
-				Value: []string{"cafe.eks.felipe-alfaro.com"},
+				Value: newHosts,
 			})
+			glog.Infof("Mutated empty Hosts list to: %v", newHosts)
 		} else {
 			for hostIndex, host := range tls.Hosts {
 				if len(host) == 0 {
 					// Empty Host: need to generate to replace its value with
 					// one derived from the Ingress name and BKPR's domain
-					glog.Info("Parsed No Host")
+					newHost := ingress.Name + "." + whsvr.dnsSuffix
 					patch = append(patch, patchOperation{
 						Op:    "replace",
 						Path:  fmt.Sprintf("/spec/tls/%d/hosts/%d", tlsIndex, hostIndex),
-						Value: "cafe.eks.felipe-alfaro.com",
+						Value: newHost,
 					})
+					glog.Infof("Mutated empty host entry to: %s", newHost)
 				} else {
 					// Check whether Host is a FQDN
 					v := govalidator.New()
-					if err := v.Var(host, "fqdn"); err == nil {
-						glog.Infof("Parsed FQDN Host: %s", host)
-					} else {
-						// Non-FQDN: need to qualify the Host with BKPR's
-						// domain
+					if err := v.Var(host, "fqdn"); err != nil {
+						// Non-FQDN: need to qualify the Host with BKPR's domain
 						newHost := host
 						if !strings.HasSuffix(host, ".") {
 							newHost += "."
 						}
-						newHost += "eks.felipe-alfaro.com"
+						newHost += whsvr.dnsSuffix
 						patch = append(patch, patchOperation{
 							Op:    "replace",
 							Path:  fmt.Sprintf("/spec/tls/%d/hosts/%d", tlsIndex, hostIndex),
 							Value: newHost,
 						})
-						glog.Infof("Parsed non-FQDN: %s into: %s", host, newHost)
+						glog.Infof("Mutated non-FQDN: %s into: %s", host, newHost)
 					}
 				}
 			}
