@@ -1,15 +1,16 @@
+---
 apiVersion: admissionregistration.k8s.io/v1beta1
 kind: MutatingWebhookConfiguration
 metadata:
-  name: sidecar-injector-webhook-cfg
+  name: ingress-webhook-cfg
   labels:
-    app: sidecar-injector
+    app: ingress-webhook
 webhooks:
-  - name: sidecar-injector.morven.me
+  - name: ingress-webhook.kubeprod.io
     clientConfig:
       service:
-        name: sidecar-injector-webhook-svc
-        namespace: default
+        name: ingress-webhook-svc
+        namespace: kubeprod
         path: "/mutate"
       caBundle: ${CA_BUNDLE}
     rules:
@@ -22,6 +23,3 @@ webhooks:
           - "v1beta1"
         resources:
           - "ingresses"
-    namespaceSelector:
-      matchLabels:
-        sidecar-injector: enabled

@@ -1,18 +1,20 @@
+---
 apiVersion: extensions/v1beta1
 kind: Deployment
 metadata:
-  name: sidecar-injector-webhook-deployment
+  name: ingress-webhook-deployment
+  namespace: kubeprod
   labels:
-    app: sidecar-injector
+    app: ingress-webhook
 spec:
   replicas: 1
   template:
     metadata:
       labels:
-        app: sidecar-injector
+        app: ingress-webhook
     spec:
       containers:
-        - name: sidecar-injector
+        - name: ingress-webhook
           image: falfaro/sidecar-injector:latest
           imagePullPolicy: Always
           args:
@@ -26,12 +28,7 @@ spec:
             - name: webhook-certs
               mountPath: /etc/webhook/certs
               readOnly: true
-            - name: webhook-config
-              mountPath: /etc/webhook/config
       volumes:
         - name: webhook-certs
           secret:
-            secretName: sidecar-injector-webhook-certs
-        - name: webhook-config
-          configMap:
-            name: sidecar-injector-webhook-configmap
+            secretName: ingress-webhook-certs
